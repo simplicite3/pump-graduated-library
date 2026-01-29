@@ -70,7 +70,7 @@ export function CoinCard({ token }: CoinCardProps) {
         </div>
         <div className="flex justify-between">
           <span className="text-gray-500">Holders</span>
-          <span className="text-gray-400">
+          <span className={token.holderCount ? "text-gray-300" : "text-gray-600"}>
             {token.holderCount?.toLocaleString() ?? "N/A"}
           </span>
         </div>

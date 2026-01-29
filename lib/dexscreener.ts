@@ -385,7 +385,7 @@ function deduplicateTokens(tokens: GraduatedToken[]): GraduatedToken[] {
     if (!existing) {
       tokenMap.set(token.address, token);
     } else {
-      // Merge: prefer the one with more data (image, higher liquidity)
+      // Merge: keep the best data from each source
       tokenMap.set(token.address, {
         ...existing,
         imageUrl: existing.imageUrl || token.imageUrl,
@@ -394,11 +394,134 @@ function deduplicateTokens(tokens: GraduatedToken[]): GraduatedToken[] {
         marketCap: Math.max(existing.marketCap, token.marketCap),
         liquidity: Math.max(existing.liquidity, token.liquidity),
         volume24h: Math.max(existing.volume24h, token.volume24h),
+        holderCount: existing.holderCount || token.holderCount,
+        priceUsd: existing.priceUsd || token.priceUsd,
+        priceChange24h: existing.priceChange24h || token.priceChange24h,
       });
     }
   }
 
   return Array.from(tokenMap.values());
+}
+
+// ============================================================
+// Pump.fun API (Best Source - direct graduated coin data)
+// ============================================================
+
+interface PumpFunCoin {
+  coinMint: string;
+  name: string;
+  ticker: string;
+  imageUrl: string;
+  marketCap: number;
+  volume: number;
+  numHolders: number;
+  graduationDate: number;
+  poolAddress: string;
+  twitter: string | null;
+  telegram: string | null;
+  website: string | null;
+  sniperCount: number;
+  devHoldingsPercentage: number;
+  topHoldersPercentage: number;
+  allTimeHighMarketCap: number;
+}
+
+interface PumpFunResponse {
+  coins: PumpFunCoin[];
+  pagination: {
+    lastScore: number;
+    hasMore: boolean;
+  };
+}
+
+const PUMPFUN_API = "https://advanced-api-v2.pump.fun";
+
+// Fetch graduated coins from Pump.fun API with cursor pagination
+async function fetchPumpFunGraduated(): Promise<GraduatedToken[]> {
+  const allTokens: GraduatedToken[] = [];
+  const seenMints = new Set<string>();
+  let lastScore = 0;
+  let hasMore = true;
+  let pageCount = 0;
+  const maxPages = 6; // ~90 unique coins per cycle, avoid looping
+
+  while (hasMore && pageCount < maxPages) {
+    try {
+      const url =
+        pageCount === 0
+          ? `${PUMPFUN_API}/coins/graduated?limit=50&includeNsfw=false`
+          : `${PUMPFUN_API}/coins/graduated?limit=50&includeNsfw=false&lastScore=${lastScore}`;
+
+      const response = await fetch(url, {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "Mozilla/5.0",
+        },
+      });
+
+      if (!response.ok) break;
+
+      const data: PumpFunResponse = await response.json();
+      if (!data.coins || data.coins.length === 0) break;
+
+      // Detect loop: if we've seen the first coin already, stop
+      if (seenMints.has(data.coins[0].coinMint)) break;
+
+      for (const coin of data.coins) {
+        if (seenMints.has(coin.coinMint)) continue;
+        seenMints.add(coin.coinMint);
+
+        // Only include coins with $50K+ market cap
+        if (coin.marketCap < 50_000 || coin.marketCap > MAX_GRADUATED_MCAP)
+          continue;
+
+        allTokens.push(pumpFunCoinToToken(coin));
+      }
+
+      lastScore = data.pagination.lastScore;
+      hasMore = data.pagination.hasMore;
+      pageCount++;
+
+      await delay(300);
+    } catch (error) {
+      console.error(`Error fetching Pump.fun page ${pageCount}:`, error);
+      break;
+    }
+  }
+
+  console.log(
+    `Pump.fun API: ${allTokens.length} graduated tokens (${pageCount} pages)`
+  );
+  return allTokens;
+}
+
+// Transform Pump.fun coin to our GraduatedToken format
+function pumpFunCoinToToken(coin: PumpFunCoin): GraduatedToken {
+  // Build image URL - Pump.fun stores images on IPFS or their CDN
+  let imageUrl: string | null = null;
+  if (coin.imageUrl) {
+    imageUrl = coin.imageUrl.startsWith("http")
+      ? coin.imageUrl
+      : `https://image.pump.fun/${coin.imageUrl}`;
+  }
+
+  return {
+    address: coin.coinMint,
+    symbol: coin.ticker,
+    name: coin.name,
+    imageUrl,
+    marketCap: coin.marketCap,
+    liquidity: 0, // Pump.fun API doesn't provide liquidity directly
+    holderCount: coin.numHolders,
+    priceUsd: 0,
+    priceChange24h: 0,
+    volume24h: coin.volume,
+    pairAddress: coin.poolAddress || "",
+    pairCreatedAt: coin.graduationDate,
+    dexScreenerUrl: buildDexScreenerUrl(coin.poolAddress || coin.coinMint),
+    pumpfunUrl: buildPumpfunUrl(coin.coinMint),
+  };
 }
 
 // ============================================================
@@ -420,9 +543,12 @@ export async function fetchAllGraduatedTokens(): Promise<GraduatedToken[]> {
   console.log("Fetching graduated tokens from multiple sources...");
   const startTime = Date.now();
 
-  // Phase 1: Fetch GeckoTerminal SEQUENTIALLY (shared rate limit of 30/min)
-  // and DexScreener in parallel (separate rate limit)
-  const [geckoTokens, dexPairs] = await Promise.all([
+  // Phase 1: Fetch from all sources
+  // - Pump.fun API (primary - best data, today's graduates)
+  // - GeckoTerminal (secondary - trending across dates)
+  // - DexScreener (tertiary - search-based discovery)
+  const [pumpFunTokens, geckoTokens, dexPairs] = await Promise.all([
+    fetchPumpFunGraduated(),
     fetchGeckoSequential(),
     fetchDexScreenerAll(),
   ]);
@@ -434,8 +560,8 @@ export async function fetchAllGraduatedTokens(): Promise<GraduatedToken[]> {
 
   console.log(`DexScreener: ${dexGraduated.length} graduated tokens`);
 
-  // Phase 2: Combine all tokens
-  const allTokens = [...geckoTokens, ...dexGraduated];
+  // Phase 2: Combine all tokens (Pump.fun first so its richer data wins in dedup)
+  const allTokens = [...pumpFunTokens, ...geckoTokens, ...dexGraduated];
 
   // Phase 3: Deduplicate
   const uniqueTokens = deduplicateTokens(allTokens);
