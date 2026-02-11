@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { GraduatedToken, TokensApiResponse } from "@/lib/types";
 import { MARKET_CAP_TIERS } from "@/lib/constants";
 import { groupTokensByTier, formatRelativeTime } from "@/lib/utils";
 import { TierRow } from "@/components/TierRow";
 import { LoadingState } from "@/components/LoadingState";
 import { RefreshButton } from "@/components/RefreshButton";
+
 
 export default function HomePage() {
   const [tokens, setTokens] = useState<GraduatedToken[]>([]);
@@ -15,6 +16,7 @@ export default function HomePage() {
   const [limitations, setLimitations] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showNote, setShowNote] = useState(false);
 
   const fetchTokens = useCallback(async () => {
     setIsLoading(true);
@@ -40,7 +42,12 @@ export default function HomePage() {
     fetchTokens();
   }, [fetchTokens]);
 
-  const groupedTokens = groupTokensByTier(tokens);
+  const filteredTokens = tokens.filter((t) => {
+    const lqRatio = t.marketCap > 0 ? (t.liquidity / t.marketCap) * 100 : 0;
+    return lqRatio > 0.2;
+  });
+
+  const groupedTokens = groupTokensByTier(filteredTokens);
 
   return (
     <main className="min-h-screen pb-8">
@@ -50,11 +57,8 @@ export default function HomePage() {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
               <h1 className="text-2xl font-bold text-white">
-                Pump.fun Graduated Library
+                The Majors of Pumpfun in the Last 30 Days
               </h1>
-              <p className="text-sm text-gray-500 mt-1">
-                Browse tokens that graduated from Pump.fun in the last 30 days
-              </p>
             </div>
 
             <div className="flex items-center gap-4">
@@ -72,7 +76,7 @@ export default function HomePage() {
             <div className="flex items-center gap-6 mt-4 text-sm">
               <div className="flex items-center gap-2">
                 <span className="text-gray-500">Total Tokens:</span>
-                <span className="text-white font-medium">{totalCount}</span>
+                <span className="text-white font-medium border border-gray-600 rounded px-2 py-0.5">{filteredTokens.length}</span>
               </div>
               {MARKET_CAP_TIERS.map((tier) => (
                 <div key={tier.id} className="flex items-center gap-2">
@@ -81,24 +85,28 @@ export default function HomePage() {
                     style={{ backgroundColor: tier.color }}
                   />
                   <span className="text-gray-500">{tier.label}:</span>
-                  <span className="text-white font-medium">
+                  <span className="text-white font-medium border border-gray-600 rounded px-2 py-0.5">
                     {groupedTokens[tier.id]?.length || 0}
                   </span>
                 </div>
               ))}
+              {limitations && (
+                <button
+                  onClick={() => setShowNote(!showNote)}
+                  className="ml-auto text-xs text-yellow-500/80 hover:text-yellow-400 transition-colors cursor-pointer"
+                >
+                  Note {showNote ? "▾" : "▸"}
+                </button>
+              )}
+            </div>
+          )}
+          {showNote && limitations && (
+            <div className="mt-2 text-xs text-yellow-500/70 bg-yellow-500/5 border border-yellow-500/20 rounded-lg px-3 py-2">
+              {limitations}
             </div>
           )}
         </div>
       </header>
-
-      {/* Disclaimer */}
-      {limitations && !isLoading && (
-        <div className="max-w-[1800px] mx-auto px-4 mt-4">
-          <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg px-4 py-3 text-xs text-yellow-500/80">
-            <strong>Note:</strong> {limitations}
-          </div>
-        </div>
-      )}
 
       {/* Main Content */}
       <div className="max-w-[1800px] mx-auto mt-6">

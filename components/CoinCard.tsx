@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { GraduatedToken } from "@/lib/types";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 
@@ -8,8 +9,23 @@ interface CoinCardProps {
 }
 
 export function CoinCard({ token }: CoinCardProps) {
+  const [copied, setCopied] = useState(false);
+
+  const copyCA = () => {
+    navigator.clipboard.writeText(token.address);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
   const priceChangeColor =
     token.priceChange24h >= 0 ? "text-green-400" : "text-red-400";
+
+  const lqMktcpRatio = token.marketCap > 0
+    ? (token.liquidity / token.marketCap) * 100
+    : 0;
+  const lqMktcpColor =
+    lqMktcpRatio >= 10 ? "text-green-400" :
+    lqMktcpRatio >= 5 ? "text-yellow-400" :
+    "text-red-400";
 
   return (
     <div className="flex-shrink-0 w-52 snap-start bg-card border border-border rounded-xl p-4 hover:border-accent/50 transition-all duration-200 card-glow">
@@ -69,9 +85,9 @@ export function CoinCard({ token }: CoinCardProps) {
           </span>
         </div>
         <div className="flex justify-between">
-          <span className="text-gray-500">Holders</span>
-          <span className={token.holderCount ? "text-gray-300" : "text-gray-600"}>
-            {token.holderCount?.toLocaleString() ?? "N/A"}
+          <span className="text-gray-500">Market Depth</span>
+          <span className={lqMktcpColor}>
+            {lqMktcpRatio.toFixed(1)}%
           </span>
         </div>
       </div>
@@ -95,6 +111,12 @@ export function CoinCard({ token }: CoinCardProps) {
           Pump.fun
         </a>
       </div>
+      <button
+        onClick={copyCA}
+        className="w-full mt-2 py-1.5 text-xs font-medium bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors text-gray-400 hover:text-white"
+      >
+        {copied ? "Copied!" : "Copy CA"}
+      </button>
     </div>
   );
 }
